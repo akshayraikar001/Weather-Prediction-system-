@@ -1,0 +1,53 @@
+{
+  "accuracy": 0.8796143250688705,
+  "positive_class_mean_probability": 0.48566442025130724,
+  "confusion_matrix": [
+    [
+      1602,
+      194
+    ],
+    [
+      243,
+      1591
+    ]
+  ],
+  "classification_report": {
+    "0": {
+      "precision": 0.8682926829268293,
+      "recall": 0.8919821826280624,
+      "f1-score": 0.8799780280142818,
+      "support": 1796.0
+    },
+    "1": {
+      "precision": 0.8913165266106443,
+      "recall": 0.8675027262813523,
+      "f1-score": 0.8792484111633048,
+      "support": 1834.0
+    },
+    "accuracy": 0.8796143250688705,
+    "macro avg": {
+      "precision": 0.8798046047687368,
+      "recall": 0.8797424544547073,
+      "f1-score": 0.8796132195887933,
+      "support": 3630.0
+    },
+    "weighted avg": {
+      "precision": 0.8799251152453187,
+      "recall": 0.8796143250688705,
+      "f1-score": 0.8796094006576174,
+      "support": 3630.0
+    }
+  },
+  "test_rows": 3630,
+  "train_end_date": "2024-12-31",
+  "feature_columns": [
+    "city",
+    "temperature_celsius",
+    "humidity",
+    "pressure_mb",
+    "wind_speed_kph",
+    "cloud_cover",
+    "rain_today",
+    "month"
+  ]
+}

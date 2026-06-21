@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: weather-prediction-model
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_server.py
+    healthCheckPath: /health
+    autoDeployTrigger: commit
