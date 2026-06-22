@@ -1,6 +1,7 @@
 import json
 from datetime import date, datetime
 from pathlib import Path
+from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -18,6 +19,7 @@ MODEL_PATH = BASE_DIR / "models" / "rain_tomorrow_model.pkl"
 DATA_PATH = BASE_DIR / "archive" / "india_historical_daily_weather.csv"
 STATIC_DIR = BASE_DIR / "frontend"
 DEFAULT_CITY = "Pune"
+LIVE_CACHE_TTL_SECONDS = 600
 
 model_bundle = joblib.load(MODEL_PATH)
 model = model_bundle["model"]
@@ -40,6 +42,7 @@ city_lookup = {
 
 app = FastAPI(title="Weather Prediction System", version="1.1.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+snapshot_cache: dict[str, tuple[float, dict]] = {}
 
 
 class PredictionRequest(BaseModel):
@@ -82,6 +85,23 @@ def call_open_meteo(params: dict) -> dict | list:
         ) from exc
 
 
+def get_cached_snapshot(city: str) -> dict | None:
+    cached = snapshot_cache.get(city)
+    if not cached:
+        return None
+
+    cached_at, payload = cached
+    if monotonic() - cached_at > LIVE_CACHE_TTL_SECONDS:
+        snapshot_cache.pop(city, None)
+        return None
+
+    return payload
+
+
+def set_cached_snapshot(city: str, payload: dict) -> None:
+    snapshot_cache[city] = (monotonic(), payload)
+
+
 def build_heat_points(latitude: float, longitude: float) -> list[dict]:
     offsets = [-0.18, 0.0, 0.18]
     points = [
@@ -89,14 +109,18 @@ def build_heat_points(latitude: float, longitude: float) -> list[dict]:
         for lat_offset in offsets
         for lon_offset in offsets
     ]
-    payload = call_open_meteo(
-        {
-            "latitude": ",".join(str(point[0]) for point in points),
-            "longitude": ",".join(str(point[1]) for point in points),
-            "current": "temperature_2m",
-            "timezone": "Asia/Kolkata",
-        }
-    )
+    try:
+        payload = call_open_meteo(
+            {
+                "latitude": ",".join(str(point[0]) for point in points),
+                "longitude": ",".join(str(point[1]) for point in points),
+                "current": "temperature_2m",
+                "timezone": "Asia/Kolkata",
+            }
+        )
+    except HTTPException:
+        return []
+
     responses = payload if isinstance(payload, list) else [payload]
 
     return [
@@ -110,42 +134,51 @@ def build_heat_points(latitude: float, longitude: float) -> list[dict]:
 
 
 def fetch_live_snapshot(city: str) -> dict:
+    cached_snapshot = get_cached_snapshot(city)
+    if cached_snapshot:
+        return cached_snapshot
+
     reference = ensure_supported_city(city)
-    live_payload = call_open_meteo(
-        {
-            "latitude": reference["latitude"],
-            "longitude": reference["longitude"],
-            "current": ",".join(
-                [
-                    "temperature_2m",
-                    "relative_humidity_2m",
-                    "pressure_msl",
-                    "wind_speed_10m",
-                    "cloud_cover",
-                    "rain",
-                    "weather_code",
-                ]
-            ),
-            "daily": ",".join(
-                [
-                    "weather_code",
-                    "temperature_2m_max",
-                    "temperature_2m_min",
-                    "precipitation_probability_max",
-                    "rain_sum",
-                ]
-            ),
-            "timezone": "Asia/Kolkata",
-            "forecast_days": 3,
-        }
-    )
+    try:
+        live_payload = call_open_meteo(
+            {
+                "latitude": reference["latitude"],
+                "longitude": reference["longitude"],
+                "current": ",".join(
+                    [
+                        "temperature_2m",
+                        "relative_humidity_2m",
+                        "pressure_msl",
+                        "wind_speed_10m",
+                        "cloud_cover",
+                        "rain",
+                        "weather_code",
+                    ]
+                ),
+                "daily": ",".join(
+                    [
+                        "weather_code",
+                        "temperature_2m_max",
+                        "temperature_2m_min",
+                        "precipitation_probability_max",
+                        "rain_sum",
+                    ]
+                ),
+                "timezone": "Asia/Kolkata",
+                "forecast_days": 3,
+            }
+        )
+    except HTTPException:
+        if cached_snapshot:
+            return cached_snapshot
+        raise
 
     current = live_payload["current"]
     daily = live_payload.get("daily", {})
     observation_date = current["time"].split("T")[0]
     rain_today = 1 if float(current.get("rain", 0) or 0) > 0 else 0
 
-    return {
+    snapshot = {
         "city": city,
         "state": reference["state"],
         "latitude": reference["latitude"],
@@ -180,6 +213,18 @@ def fetch_live_snapshot(city: str) -> dict:
         ],
         "heat_points": build_heat_points(reference["latitude"], reference["longitude"]),
     }
+
+    if not snapshot["heat_points"]:
+        snapshot["heat_points"] = [
+            {
+                "latitude": reference["latitude"],
+                "longitude": reference["longitude"],
+                "temperature_celsius": snapshot["current"]["temperature_celsius"],
+            }
+        ]
+
+    set_cached_snapshot(city, snapshot)
+    return snapshot
 
 
 def predict_from_features(features: dict, observed_on: date) -> PredictionResponse:
